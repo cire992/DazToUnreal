@@ -50,6 +50,7 @@
 #include "Misc/MessageDialog.h"
 #include "Misc/EngineVersion.h"
 #include "Engine/SkeletalMesh.h"
+#include "SkeletalMeshTypes.h"
 #include "Animation/AnimInstance.h"
 #include "Misc/ScopedSlowTask.h"
 #include "Serialization/JsonReader.h"
@@ -2088,6 +2089,23 @@ UObject* FDazToUnrealModule::ImportFBXAsset(const DazToUnrealImportData& DazImpo
 	 {
 		  if (USkeletalMesh* SkeletalMesh = Cast<USkeletalMesh>(ImportedAsset))
 		  {
+#if ENGINE_MAJOR_VERSION > 4
+				// The FBX import options have no skin weight precision setting, so set it on every LOD's
+				// build settings and rebuild. The scope calls PostEditChange, which rebuilds the render data.
+				if (CachedSettings->UseHighPrecisionSkinWeights)
+				{
+					FScopedSkeletalMeshPostEditChange ScopedPostEditChange(SkeletalMesh);
+					SkeletalMesh->Modify();
+					for (int32 LODIndex = 0; LODIndex < SkeletalMesh->GetLODNum(); ++LODIndex)
+					{
+						if (FSkeletalMeshLODInfo* LODInfo = SkeletalMesh->GetLODInfo(LODIndex))
+						{
+							LODInfo->BuildSettings.bUseHighPrecisionSkinWeights = true;
+						}
+					}
+				}
+#endif
+
 				if (DazImportData.bSetPostProcessAnimation && CachedSettings->SkeletonPostProcessAnimation.Contains(SkeletonPath))
 				{
 #if ENGINE_MAJOR_VERSION > 4

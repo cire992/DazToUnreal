@@ -53,7 +53,15 @@ for graph in anim_blueprint.get_animation_graphs():
     if graph.get_fname() == 'AnimGraph':
         for graph_node in graph.get_graph_nodes_of_class(unreal.AnimGraphNode_ControlRig, True):
             anim_node = graph_node.get_editor_property('node')
-            anim_node.set_editor_property('control_rig_class', blueprint.generated_class())
+            if hasattr(unreal, 'ControlRigAssetStrongReference'):
+                # UE 5.8+: ControlRigClass is deprecated (setting it raises); the rig goes in ControlRigAssetReference.
+                control_rig_reference = unreal.ControlRigAssetStrongReference()
+                control_rig_reference.import_text('(BlueprintRigClass="%s")' % blueprint.generated_class().get_path_name())
+                anim_node.set_editor_property('control_rig_asset_reference', control_rig_reference)
+            else:
+                anim_node.set_editor_property('control_rig_class', blueprint.generated_class())
+            # 'node' returns a copy of the struct, so write it back to the graph node.
+            graph_node.set_editor_property('node', anim_node)
 
 unreal.BlueprintEditorLibrary.compile_blueprint(anim_blueprint)        
 

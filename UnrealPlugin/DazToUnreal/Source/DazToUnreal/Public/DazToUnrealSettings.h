@@ -29,6 +29,7 @@ public:
 		ZeroRootRotationOnImport = true;
 		CombineIdenticalMaterials = true;
 		UpdatedFbxAsAscii = false;
+		UseHighPrecisionSkinWeights = true;
 
 		CreateAutoJCMControlRig = true;
 		CreateFullBodyIKControlRig = true;
@@ -133,6 +134,10 @@ public:
 	/** If true write the Updated (intermediate) FBX file as Ascii */
 	UPROPERTY(config, EditAnywhere, Category = PluginSettings)
 		bool UpdatedFbxAsAscii;
+
+	/** Build imported skeletal meshes with 16-bit (high precision) skin weights instead of 8-bit. */
+	UPROPERTY(config, EditAnywhere, Category = PluginSettings)
+		bool UseHighPrecisionSkinWeights;
 
 	/** Create a Control Rig based Post Process Animation for handling AutoJCM morphs */
 	UPROPERTY(config, EditAnywhere, Category = ControlRig)
