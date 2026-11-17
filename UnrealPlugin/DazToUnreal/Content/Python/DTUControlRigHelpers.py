@@ -2,6 +2,12 @@ import unreal
 import os.path
 import json
 
+def control_exists(hierarchy, control_key):
+    # find_control is deprecated (UE 5.8 warns); Contains is the replacement. Keep find_control for older engines.
+    if hasattr(hierarchy, 'contains'):
+        return hierarchy.contains(control_key)
+    return hierarchy.find_control(control_key).get_editor_property('key').get_editor_property('name') != ""
+
 class bone_limits_struct():
     bone_limit_x_min = 0.0
     bone_limit_x_max = 0.0
@@ -265,12 +271,8 @@ def create_control(blueprint, bone_name, parent_bone_name, shape_type):
 
     key = unreal.RigElementKey(type=unreal.RigElementType.BONE, name=bone_name)
     hierarchy_controller.remove_element(unreal.RigElementKey(type=unreal.RigElementType.CONTROL, name=control_name))
-    rig_control_element = hierarchy.find_control(unreal.RigElementKey(type=unreal.RigElementType.CONTROL, name=control_name))
-    control_key = rig_control_element.get_editor_property('key')
-    #print(rig_control_element)
-    if control_key.get_editor_property('name') != "":
-        control_key = rig_control_element.get_editor_property('key')
-    else:
+    control_key = unreal.RigElementKey(type=unreal.RigElementType.CONTROL, name=control_name)
+    if not control_exists(hierarchy, control_key):
         try:
             control_key = hierarchy_controller.add_control(control_name, unreal.RigElementKey(), default_setting, default_value, True, True)
         except:

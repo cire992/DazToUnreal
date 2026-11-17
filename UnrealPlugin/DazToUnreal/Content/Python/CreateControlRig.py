@@ -10,6 +10,12 @@ def get_scriptstruct_by_node_name(node_name):
         if node.get_node_path() == node_name:
             return node.get_script_struct()
 
+def control_exists(hierarchy, control_key):
+    # find_control is deprecated (UE 5.8 warns); Contains is the replacement. Keep find_control for older engines.
+    if hasattr(hierarchy, 'contains'):
+        return hierarchy.contains(control_key)
+    return hierarchy.find_control(control_key).get_editor_property('key').get_editor_property('name') != ""
+
 
 last_construction_link = 'PrepareForExecution'
 def create_construction(bone_name):
@@ -100,12 +106,8 @@ def create_control(bone_name):
     unreal.EulerTransform(scale=[1, 1, 1]))
 
     key = unreal.RigElementKey(type=unreal.RigElementType.BONE, name=bone_name)
-    rig_control_element = hierarchy.find_control(unreal.RigElementKey(type=unreal.RigElementType.CONTROL, name=control_name))
-    control_key = rig_control_element.get_editor_property('key')
-    print(rig_control_element)
-    if control_key.get_editor_property('name') != "":
-        control_key = rig_control_element.get_editor_property('key')
-    else:
+    control_key = unreal.RigElementKey(type=unreal.RigElementType.CONTROL, name=control_name)
+    if not control_exists(hierarchy, control_key):
         try:
             control_key = hierarchy_controller.add_control(control_name, unreal.RigElementKey(), default_setting, default_value, True, True)
         except:
