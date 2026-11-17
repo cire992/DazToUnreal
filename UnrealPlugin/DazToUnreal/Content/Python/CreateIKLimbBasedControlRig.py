@@ -28,7 +28,7 @@ else:
 
 skeletal_mesh = unreal.load_object(name = args.skeletalMesh, outer = None)
 skeletal_mesh_import_data = skeletal_mesh.get_editor_property('asset_import_data')
-skeletal_mesh_force_front_x = skeletal_mesh_import_data.get_editor_property('force_front_x_axis')
+skeletal_mesh_force_front_x = DTUControlRigHelpers.get_force_front_x_axis(skeletal_mesh_import_data)
 skeleton = skeletal_mesh.get_editor_property('skeleton')
 #blueprint = unreal.load_object(name = '/Game/NewControlRigBlueprint.NewControlRigBlueprint', outer = None)
 

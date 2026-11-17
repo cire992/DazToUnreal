@@ -8,6 +8,27 @@ def control_exists(hierarchy, control_key):
         return hierarchy.contains(control_key)
     return hierarchy.find_control(control_key).get_editor_property('key').get_editor_property('name') != ""
 
+def get_force_front_x_axis(asset_import_data, dtu_data=None):
+    # Whether the mesh was imported facing +X. Legacy FBX imports keep it on FbxAssetImportData.
+    # Interchange imports (UE 5.8 re-imports go through Interchange) keep it in the translator settings,
+    # and FbxSkeletalMeshImportData's force_front_x_axis doesn't exist there.
+    if asset_import_data:
+        try:
+            return bool(asset_import_data.get_editor_property('force_front_x_axis'))
+        except Exception:
+            pass
+        if hasattr(asset_import_data, 'get_translator_settings'):
+            try:
+                translator_settings = asset_import_data.get_translator_settings()
+                if translator_settings:
+                    return bool(translator_settings.get_editor_property('force_front_x_axis'))
+            except Exception:
+                pass
+    # Fall back to what the bridge asked the importer for.
+    if dtu_data and 'FaceCharacterRight' in dtu_data:
+        return bool(dtu_data['FaceCharacterRight'])
+    return False
+
 class bone_limits_struct():
     bone_limit_x_min = 0.0
     bone_limit_x_max = 0.0
@@ -95,7 +116,7 @@ def get_bone_limits_from_skeletalmesh(skeletal_mesh):
     print(dtu_file)
     if os.path.exists(dtu_file):
         dtu_data = json.load(open(dtu_file))
-        force_front_x = asset_import_data.get_editor_property('force_front_x_axis')
+        force_front_x = get_force_front_x_axis(asset_import_data, dtu_data)
         bone_limits = get_bone_limits(dtu_data, force_front_x)
         return bone_limits
     return []

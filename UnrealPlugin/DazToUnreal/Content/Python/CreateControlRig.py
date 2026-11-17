@@ -1,6 +1,7 @@
 import unreal
 import argparse
 import json
+import DTUControlRigHelpers
 
 def get_scriptstruct_by_node_name(node_name):
     control_rig_blueprint = unreal.load_object(None, '/DazToUnreal/Python/ControlRig_Node_Library')
@@ -334,7 +335,7 @@ if blueprint:
         
     skeletal_mesh = unreal.load_object(name = args.skeletalMesh, outer = None)
     skeletal_mesh_import_data = skeletal_mesh.get_editor_property('asset_import_data')
-    skeletal_mesh_force_front_x = skeletal_mesh_import_data.get_editor_property('force_front_x_axis')
+    skeletal_mesh_force_front_x = DTUControlRigHelpers.get_force_front_x_axis(skeletal_mesh_import_data, dtu_data)
 
     stiff_limits = ['l_shoulder', 'r_shoulder']
     stiff_limits+= ['lCollar', 'rCollar']

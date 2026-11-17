@@ -69,8 +69,8 @@ rtg_controller.auto_map_chains(unreal.AutoMapChainType.EXACT, True)
 source_asset_import_data = source_ik_mesh.get_editor_property('asset_import_data')
 target_asset_import_data = target_ik_mesh.get_editor_property('asset_import_data')
 
-source_force_front_x = source_asset_import_data.get_editor_property('force_front_x_axis')
-target_force_front_x = target_asset_import_data.get_editor_property('force_front_x_axis')
+source_force_front_x = DTUControlRigHelpers.get_force_front_x_axis(source_asset_import_data)
+target_force_front_x = DTUControlRigHelpers.get_force_front_x_axis(target_asset_import_data)
 
 # Rotate the root if needed so the character faces forward
 if source_force_front_x == False and target_force_front_x == True:
