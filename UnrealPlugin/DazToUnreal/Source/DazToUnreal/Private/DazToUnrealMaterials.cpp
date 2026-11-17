@@ -430,8 +430,14 @@ UMaterialInstanceConstant* FDazToUnrealMaterials::CreateMaterial(const FString C
 			{
 				if (MaterialProperty.Type == TEXT("Texture"))
 				{
-					FSoftObjectPath TextureAssetPath(CharacterTexturesFolder / MaterialProperty.Value);
-					UObject* TextureAsset = TextureAssetPath.TryLoad();
+					// A value that is already an object path ("/DazAssets/Textures/...", the shared texture
+					// library or a settings texture) isn't looked up under the character's folder first
+					UObject* TextureAsset = nullptr;
+					if (!MaterialProperty.Value.StartsWith(TEXT("/")))
+					{
+						FSoftObjectPath TextureAssetPath(CharacterTexturesFolder / MaterialProperty.Value);
+						TextureAsset = TextureAssetPath.TryLoad();
+					}
 					if (TextureAsset == nullptr)
 					{
 						FSoftObjectPath TextureAssetPathFull(MaterialProperty.Value);
