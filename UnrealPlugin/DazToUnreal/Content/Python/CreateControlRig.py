@@ -1,6 +1,7 @@
 import unreal
 import argparse
 import json
+import DTUControlRigHelpers
 
 def get_scriptstruct_by_node_name(node_name):
     control_rig_blueprint = unreal.load_object(None, '/DazToUnreal/Python/ControlRig_Node_Library')
@@ -227,8 +228,14 @@ args = parser.parse_args()
 asset_name = args.skeletalMesh.split('.')[1] + '_CR'
 package_path = args.skeletalMesh.rsplit('/', 1)[0]
 
-blueprint = unreal.load_object(name = package_path + '/' + asset_name , outer = None)
-if not blueprint:
+# Re-import: reuse the existing rig (it's rebuilt below) instead of asking create_asset to replace it.
+asset_path = package_path + '/' + asset_name + '.' + asset_name
+blueprint = None
+if unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+    blueprint = unreal.load_object(name = asset_path, outer = None)
+    if not isinstance(blueprint, unreal.ControlRigBlueprint):
+        raise RuntimeError('%s already exists and is not a Control Rig Blueprint; not replacing it.' % asset_path)
+else:
     blueprint = unreal.AssetToolsHelpers.get_asset_tools().create_asset(asset_name=asset_name,
                                            package_path=package_path,
                                            asset_class=unreal.ControlRigBlueprint,
@@ -328,7 +335,7 @@ if blueprint:
         
     skeletal_mesh = unreal.load_object(name = args.skeletalMesh, outer = None)
     skeletal_mesh_import_data = skeletal_mesh.get_editor_property('asset_import_data')
-    skeletal_mesh_force_front_x = skeletal_mesh_import_data.get_editor_property('force_front_x_axis')
+    skeletal_mesh_force_front_x = DTUControlRigHelpers.get_force_front_x_axis(skeletal_mesh_import_data, dtu_data)
 
     stiff_limits = ['l_shoulder', 'r_shoulder']
     stiff_limits+= ['lCollar', 'rCollar']
