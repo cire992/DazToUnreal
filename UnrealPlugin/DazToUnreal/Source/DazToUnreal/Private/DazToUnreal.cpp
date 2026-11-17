@@ -44,6 +44,7 @@
 #include "Factories/MaterialImportHelpers.h"
 #include "Factories/FbxTextureImportData.h"
 #include "Factories/FbxSkeletalMeshImportData.h"
+#include "EditorFramework/AssetImportData.h"
 #include "Interfaces/IPluginManager.h"
 #include "ContentBrowserModule.h"
 #include "IContentBrowserSingleton.h"
@@ -2057,6 +2058,39 @@ UObject* FDazToUnrealModule::ImportFBXAsset(const DazToUnrealImportData& DazImpo
 	 if (DazImportData.AssetType == DazAssetType::Animation || DazImportData.AssetType == DazAssetType::Pose)
 	 {
 		 FbxImportData->DestinationPath = CachedSettings->AnimationImportDirectory.Path;
+	 }
+
+	 // Re-import from the same FBX file: when the existing mesh's stored source file is this file, the engine
+	 // switches to an "atomic reimport" through the reimport manager. That path ignores the options set above
+	 // and, once the mesh carries Interchange import data (UE 5.8), re-imports it with default FBX options,
+	 // which drops every morph target. Forget the stored source file so this import takes the normal
+	 // replace-existing path with the bridge's options, the same as a re-import from a new export folder.
+	 if (DazImportData.AssetType == DazAssetType::SkeletalMesh && FbxImportData->bReplaceExisting)
+	 {
+		 const FString AssetName = FPaths::GetBaseFilename(NewFBXPath);
+		 const FString ExistingObjectPath = FbxImportData->DestinationPath / AssetName + TEXT(".") + AssetName;
+		 if (USkeletalMesh* ExistingMesh = Cast<USkeletalMesh>(StaticLoadObject(USkeletalMesh::StaticClass(), nullptr, *ExistingObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet)))
+		 {
+			 if (UAssetImportData* ExistingImportData = ExistingMesh->GetAssetImportData())
+			 {
+				 const FString NewFullPath = FPaths::ConvertRelativePathToFull(NewFBXPath);
+				 bool bSameSource = false;
+				 for (const FString& SourceFile : ExistingImportData->ExtractFilenames())
+				 {
+					 if (FPaths::IsSamePath(FPaths::ConvertRelativePathToFull(SourceFile), NewFullPath))
+					 {
+						 bSameSource = true;
+						 break;
+					 }
+				 }
+				 if (bSameSource)
+				 {
+					 UE_LOG(LogDazToUnreal, Log, TEXT("DazToUnreal: %s was imported from this FBX before; re-importing it with the bridge's options instead of an atomic reimport"), *ExistingObjectPath);
+					 ExistingImportData->Modify();
+					 ExistingImportData->SourceData = FAssetImportInfo();
+				 }
+			 }
+		 }
 	 }
 
 	 TArray<UObject*> ImportedAssets;
