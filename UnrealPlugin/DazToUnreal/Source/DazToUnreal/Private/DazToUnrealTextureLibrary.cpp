@@ -12,10 +12,10 @@
 #include "Misc/Paths.h"
 #include "Misc/SecureHash.h"
 
-namespace
+namespace DazToUnrealTextureLibraryPrivate
 {
 	// Same budget as the scene exporter's default MaxObjectPathLength
-	const int32 MaxObjectPathLength = 150;
+	const int32 LibraryMaxPathLength = 150;
 
 	FString CleanFile(const FString& File)
 	{
@@ -138,20 +138,22 @@ FString FDazToUnrealTextureLibrary::RuntimePathOf(const FString& SourceFile)
 
 void FDazToUnrealTextureLibrary::MakeLibraryPath(const FString& Root, const FString& SourceFile, FString& OutPackageFolder, FString& OutAssetName)
 {
+	using namespace DazToUnrealTextureLibraryPrivate;
 	const FString RuntimePath = RuntimePathOf(SourceFile);
 	if (!RuntimePath.IsEmpty())
 	{
-		FDazScenePaths::MakeAssetPath(Root, RuntimePath, MaxObjectPathLength, OutPackageFolder, OutAssetName);
+		FDazScenePaths::MakeAssetPath(Root, RuntimePath, LibraryMaxPathLength, OutPackageFolder, OutAssetName);
 	}
 	else
 	{
 		const FString External = TEXT("External") / FDazScenePaths::ShortHash(CleanFile(SourceFile)) / FPaths::GetCleanFilename(SourceFile);
-		FDazScenePaths::MakeAssetPath(Root, External, MaxObjectPathLength, OutPackageFolder, OutAssetName);
+		FDazScenePaths::MakeAssetPath(Root, External, LibraryMaxPathLength, OutPackageFolder, OutAssetName);
 	}
 }
 
 TMap<FString, FString> FDazToUnrealTextureLibrary::Sync(const FString& Root, const TArray<FDazLibraryTextureRequest>& Requests, TArray<UObject*>& OutDisableSRGB)
 {
+	using namespace DazToUnrealTextureLibraryPrivate;
 	TMap<FString, FString> Result;
 	IAssetTools& AssetTools = FModuleManager::LoadModuleChecked<FAssetToolsModule>("AssetTools").Get();
 

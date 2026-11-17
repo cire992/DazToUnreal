@@ -6,6 +6,7 @@
 #include "CoreMinimal.h"
 
 class FJsonObject;
+class UObject;
 
 /** A texture file one import needs, and how its materials use it */
 struct FDazLibraryTextureRequest
