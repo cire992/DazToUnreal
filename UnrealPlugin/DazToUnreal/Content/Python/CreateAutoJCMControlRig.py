@@ -24,10 +24,22 @@ args = parser.parse_args()
 asset_name = args.skeletalMesh.split('.')[1] + '_JCM_CR'
 package_path = args.skeletalMesh.rsplit('/', 1)[0]
 
-blueprint = unreal.AssetToolsHelpers.get_asset_tools().create_asset(asset_name=asset_name,
+# On a re-import the JCM Control Rig already exists, and the JCM Anim Blueprint references it.
+# create_asset would ask to replace it (or fail when unattended), so reuse it and rebuild it in place.
+asset_path = package_path + '/' + asset_name + '.' + asset_name
+blueprint = None
+if unreal.EditorAssetLibrary.does_asset_exist(asset_path):
+    blueprint = unreal.load_object(name = asset_path, outer = None)
+    if not isinstance(blueprint, unreal.ControlRigBlueprint):
+        raise RuntimeError('%s already exists and is not a Control Rig Blueprint; not replacing it.' % asset_path)
+    unreal.log('DazToUnreal: Reusing existing JCM Control Rig ' + asset_path)
+    is_existing_rig = True
+else:
+    blueprint = unreal.AssetToolsHelpers.get_asset_tools().create_asset(asset_name=asset_name,
                                            package_path=package_path,
                                            asset_class=unreal.ControlRigBlueprint,
                                            factory=unreal.ControlRigBlueprintFactory())
+    is_existing_rig = False
 
 skeletal_mesh = unreal.load_object(name = args.skeletalMesh, outer = None)
 unreal.ControlRigBlueprintLibrary.set_preview_mesh(blueprint, skeletal_mesh)
@@ -42,6 +54,17 @@ blueprint.suspend_notifications(True)
 rig_controller = blueprint.get_controller_by_name('RigVMModel')
 if rig_controller is None:
     rig_controller = blueprint.get_controller()
+
+if is_existing_rig:
+    # Everything in the JCM rig is generated below: clear the graph and the hierarchy (bones and curves),
+    # so morphs dropped from the character don't leave stale curves or nodes behind.
+    rig_graph = rig_controller.get_graph()
+    while len(rig_graph.get_nodes()) > 0:
+        rig_controller.remove_node(rig_graph.get_nodes()[-1], False)
+    existing_hierarchy = blueprint.hierarchy
+    existing_hierarchy_controller = existing_hierarchy.get_controller()
+    for element_key in reversed(existing_hierarchy.get_all_keys()):
+        existing_hierarchy_controller.remove_element(element_key, False)
 
 morph_target_names = skeletal_mesh.get_all_morph_target_names()
 

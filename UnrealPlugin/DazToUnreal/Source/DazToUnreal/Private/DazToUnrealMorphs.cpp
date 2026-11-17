@@ -1,4 +1,5 @@
 #include "DazToUnrealMorphs.h"
+#include "DazToUnreal.h"
 #include "Serialization/JsonReader.h"
 #include "Dom/JsonObject.h"
 #include "Serialization/JsonSerializer.h"
@@ -8,6 +9,7 @@
 #include "Animation/AnimBlueprintGeneratedClass.h"
 #include "EdGraphSchema_K2_Actions.h"
 #include "AnimGraphNode_LinkedInputPose.h"
+#include "AnimGraphNode_Root.h"
 #if ENGINE_MAJOR_VERSION > 4
 #include "AnimGraphNode_ControlRig.h"
 #endif
@@ -24,15 +26,34 @@ UAnimBlueprint* FDazToUnrealMorphs::CreateJointControlAnimation(TSharedPtr<FJson
 	{
 		const FString AssetName = CharacterName + TEXT("_JCMAnim");
 		const FString PackageName = FPackageName::ObjectPathToPackageName(Folder) / AssetName;
-		const FString ObjectName = FPackageName::ObjectPathToObjectName(PackageName);
+		const FString ObjectPath = PackageName + TEXT(".") + AssetName;
 
-		// Create the new blueprint next to the SkeletalMesh and get the AnimInstance from it.
+		UAnimBlueprint* AnimBlueprint = nullptr;
+
+		// On a re-import the JCM Anim Blueprint already exists (the skeletal mesh's post-process ABP points at it).
+		// FKismetEditorUtilities::CreateBlueprint asserts when a Blueprint of that name exists, so reuse the
+		// existing one in place: clear its AnimGraph and rebuild it. References to it stay valid.
+		if (UObject* ExistingObject = StaticLoadObject(UObject::StaticClass(), nullptr, *ObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet))
+		{
+			AnimBlueprint = Cast<UAnimBlueprint>(ExistingObject);
+			if (AnimBlueprint == nullptr)
+			{
+				UE_LOG(LogDazToUnreal, Error, TEXT("DazToUnreal: %s already exists and isn't an Anim Blueprint (%s). Skipping the JCM Anim Blueprint; nothing was replaced."), *ObjectPath, *ExistingObject->GetClass()->GetName());
+				return nullptr;
+			}
+			UE_LOG(LogDazToUnreal, Log, TEXT("DazToUnreal: Reusing existing JCM Anim Blueprint %s"), *ObjectPath);
+			ResetBlueprint(AnimBlueprint, Skeleton);
+		}
+		else
+		{
+			// Create the new blueprint next to the SkeletalMesh and get the AnimInstance from it.
 #if ENGINE_MAJOR_VERSION == 4 && ENGINE_MINOR_VERSION < 26
-		UPackage* NewPackage = CreatePackage(nullptr, *PackageName);
+			UPackage* NewPackage = CreatePackage(nullptr, *PackageName);
 #else
-		UPackage* NewPackage = CreatePackage(*PackageName);
+			UPackage* NewPackage = CreatePackage(*PackageName);
 #endif
-		UAnimBlueprint* AnimBlueprint = CreateBlueprint(NewPackage, FName(AssetName), Skeleton);
+			AnimBlueprint = CreateBlueprint(NewPackage, FName(AssetName), Skeleton);
+		}
 
 
 #if 0
@@ -47,7 +68,7 @@ UAnimBlueprint* FDazToUnrealMorphs::CreateJointControlAnimation(TSharedPtr<FJson
 		// Recompile the AnimBlueprint and return the updated AnimInstance
 		FBlueprintEditorUtils::MarkBlueprintAsModified(AnimBlueprint);
 		FKismetEditorUtilities::CompileBlueprint(AnimBlueprint);
-		
+
 		return AnimBlueprint;
 	}
 	return nullptr;
@@ -60,14 +81,69 @@ UAnimBlueprint* FDazToUnrealMorphs::CreateBlueprint(UObject* InParent, FName Nam
 	UClass* ClassToUse = UAnimInstance::StaticClass();
 	UAnimBlueprint* NewBP = CastChecked<UAnimBlueprint>(FKismetEditorUtilities::CreateBlueprint(ClassToUse, InParent, Name, BPTYPE_Normal, UAnimBlueprint::StaticClass(), UBlueprintGeneratedClass::StaticClass(), NAME_None));
 
-	NewBP->TargetSkeleton = Skeleton;
+	SetupJointControlGraph(NewBP, Skeleton);
+	return NewBP;
+}
+
+// Re-import path: brings an existing JCM Anim Blueprint back to the state CreateBlueprint leaves a new one in.
+void FDazToUnrealMorphs::ResetBlueprint(UAnimBlueprint* AnimBlueprint, USkeleton* Skeleton)
+{
+	AnimBlueprint->Modify();
+
+	// The JCM ABP is a plain post-process AnimInstance. Only reparent if it no longer derives from one.
+	if (AnimBlueprint->ParentClass == nullptr || !AnimBlueprint->ParentClass->IsChildOf(UAnimInstance::StaticClass()))
+	{
+		AnimBlueprint->ParentClass = UAnimInstance::StaticClass();
+	}
+
+#if ENGINE_MAJOR_VERSION > 4
+	// Clear the AnimGraph down to its Output Pose (root) node. SetupJointControlGraph adds the rest again.
+	TArray<UEdGraph*> Graphs;
+	AnimBlueprint->GetAllGraphs(Graphs);
+	for (UEdGraph* Graph : Graphs)
+	{
+		if (Graph->GetFName() != UEdGraphSchema_K2::GN_AnimGraph)
+		{
+			continue;
+		}
+
+		TArray<UEdGraphNode*> NodesToRemove;
+		for (UEdGraphNode* Node : Graph->Nodes)
+		{
+			if (Node == nullptr)
+			{
+				continue;
+			}
+			if (Node->IsA<UAnimGraphNode_Root>())
+			{
+				Node->BreakAllNodeLinks();
+			}
+			else
+			{
+				NodesToRemove.Add(Node);
+			}
+		}
+		for (UEdGraphNode* Node : NodesToRemove)
+		{
+			FBlueprintEditorUtils::RemoveNode(AnimBlueprint, Node, /*bDontRecompile*/ true);
+		}
+	}
+#endif
+
+	SetupJointControlGraph(AnimBlueprint, Skeleton);
+}
+
+// Points the ABP at the skeleton and builds Input Pose -> Control Rig -> Output Pose in its AnimGraph.
+void FDazToUnrealMorphs::SetupJointControlGraph(UAnimBlueprint* AnimBlueprint, USkeleton* Skeleton)
+{
+	AnimBlueprint->TargetSkeleton = Skeleton;
 
 	// Because the BP itself didn't have the skeleton set when the initial compile occured, it's not set on the generated classes either
-	if (UAnimBlueprintGeneratedClass* TypedNewClass = Cast<UAnimBlueprintGeneratedClass>(NewBP->GeneratedClass))
+	if (UAnimBlueprintGeneratedClass* TypedNewClass = Cast<UAnimBlueprintGeneratedClass>(AnimBlueprint->GeneratedClass))
 	{
 		TypedNewClass->TargetSkeleton = Skeleton;
 	}
-	if (UAnimBlueprintGeneratedClass* TypedNewClass_SKEL = Cast<UAnimBlueprintGeneratedClass>(NewBP->SkeletonGeneratedClass))
+	if (UAnimBlueprintGeneratedClass* TypedNewClass_SKEL = Cast<UAnimBlueprintGeneratedClass>(AnimBlueprint->SkeletonGeneratedClass))
 	{
 		TypedNewClass_SKEL->TargetSkeleton = Skeleton;
 	}
@@ -75,18 +151,24 @@ UAnimBlueprint* FDazToUnrealMorphs::CreateBlueprint(UObject* InParent, FName Nam
 #if ENGINE_MAJOR_VERSION > 4
 	// Need to add the Pose Input Node and connect it to the Output Node in the AnimGraph
 	TArray<UEdGraph*> Graphs;
-	NewBP->GetAllGraphs(Graphs);
+	AnimBlueprint->GetAllGraphs(Graphs);
 	for (UEdGraph* Graph : Graphs)
 	{
 		if (Graph->GetFName() == UEdGraphSchema_K2::GN_AnimGraph)
 		{
+			// The Output Pose (root) node. A new ABP has only that node in its AnimGraph, and a reset one is cleared down to it.
 			UEdGraphNode* OutNode = nullptr;
 			for (UEdGraphNode* Node : Graph->Nodes)
 			{
-				OutNode = Node;
+				if (Node && Node->IsA<UAnimGraphNode_Root>())
+				{
+					OutNode = Node;
+					break;
+				}
 			}
+
 			// If the Blueprint isn't open in an Editor Window adding the UAnimGraphNode_LinkedInputPose node will crash.
-			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(NewBP);
+			GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->OpenEditorForAsset(AnimBlueprint);
 
 			// Create the Input Node
 			UAnimGraphNode_LinkedInputPose* const InputTemplate = NewObject<UAnimGraphNode_LinkedInputPose>();
@@ -111,11 +193,10 @@ UAnimBlueprint* FDazToUnrealMorphs::CreateBlueprint(UObject* InParent, FName Nam
 
 			// Don't need the editor open anymore, so close it now.
 			// Note: Turns out I can't close it because part of the action happens on a tick
-			//GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllEditorsForAsset(NewBP);
+			//GEditor->GetEditorSubsystem<UAssetEditorSubsystem>()->CloseAllEditorsForAsset(AnimBlueprint);
 		}
 	}
 #endif
-	return NewBP;
 }
 
 bool FDazToUnrealMorphs::IsAutoJCMImport(TSharedPtr<FJsonObject> JsonObject)
