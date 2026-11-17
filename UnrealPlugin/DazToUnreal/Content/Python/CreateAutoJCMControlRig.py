@@ -92,7 +92,15 @@ unreal.BlueprintEditorLibrary.compile_blueprint(anim_blueprint)
 # Setup the JCM Control Rig
 hierarchy = blueprint.hierarchy
 hierarchy_controller = hierarchy.get_controller()
-hierarchy_controller.import_bones_from_asset(args.skeletalMesh, 'None', False, False, True)
+# The rig measures each joint's angle against the bones' initial (rest) transforms, so they must be
+# the rest pose this mesh is actually animated from: the skeletal mesh's own reference pose.
+# import_bones_from_asset reads the Skeleton asset instead, and a Skeleton shared by several meshes
+# (a figure and its hair, brows, lashes) keeps the reference pose of whichever mesh created it. For
+# Genesis 8 that left the collars 3.9 degrees off, so the collar correctives fired at rest.
+if hasattr(hierarchy_controller, 'import_bones_from_skeletal_mesh'):
+    hierarchy_controller.import_bones_from_skeletal_mesh(skeletal_mesh, 'None', False, False, True)
+else:
+    hierarchy_controller.import_bones_from_asset(args.skeletalMesh, 'None', False, False, True)
 hierarchy_controller.import_curves_from_asset(args.skeletalMesh, 'None', False)
 
 rig_controller.add_unit_node_from_struct_path('/Script/ControlRig.RigUnit_BeginExecution', 'Execute', unreal.Vector2D(-97.954082, -704.318460), 'BeginExecution')
