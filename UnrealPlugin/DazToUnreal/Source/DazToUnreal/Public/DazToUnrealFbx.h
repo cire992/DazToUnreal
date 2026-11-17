@@ -67,6 +67,10 @@ public:
 	static void RemoveNodeAndReparent(FbxNode* NodeToRemove);
 	static void FixTwistBones(FbxNode* RootNode);
 	static void ConvertToEpicSkeleton(FbxScene* Scene);
+	// Reads an FBX file's bone hierarchy: each skeleton node's name mapped to the name of its nearest skeleton
+	// ancestor (empty for a root bone), in hierarchy order. Returns false if the file can't be read.
+	static bool ReadBoneParents(const FString& FbxFilePath, TMap<FString, FString>& OutBoneParents);
 private:
 	static void RenameDuplicateBones(FbxNode* RootNode, TMap<FString, int>& ExistingBones);
+	static void CollectBoneParents(FbxNode* Node, const FString& ParentBone, TMap<FString, FString>& OutBoneParents);
 };

@@ -1991,6 +1991,37 @@ bool FDazToUnrealModule::ImportTextureAssets(TArray<FString>& SourcePaths, FStri
 	 return false;
 }
 
+// Checks that an FBX's bones merge into an existing skeleton without the importer regenerating it: every bone the
+// two share has the same parent bone (by name) in both, and the FBX's root bone is the skeleton's root. On the
+// first bone that doesn't, returns false with a description in OutMismatch.
+static bool FbxBonesMergeIntoSkeleton(const TMap<FString, FString>& FbxBoneParents, const USkeleton* Skeleton, FString& OutMismatch)
+{
+	const FReferenceSkeleton& RefSkeleton = Skeleton->GetReferenceSkeleton();
+	for (const TPair<FString, FString>& Bone : FbxBoneParents)
+	{
+		const int32 SkeletonIndex = RefSkeleton.FindBoneIndex(FName(*Bone.Key));
+		if (SkeletonIndex == INDEX_NONE)
+		{
+			if (Bone.Value.IsEmpty())
+			{
+				OutMismatch = FString::Printf(TEXT("root bone '%s' of the FBX is not in the skeleton"), *Bone.Key);
+				return false;
+			}
+			continue; // a new bone: the merge adds it under its parent
+		}
+		const int32 SkeletonParentIndex = RefSkeleton.GetParentIndex(SkeletonIndex);
+		const FName SkeletonParent = SkeletonParentIndex == INDEX_NONE ? NAME_None : RefSkeleton.GetBoneName(SkeletonParentIndex);
+		const FName FbxParent = Bone.Value.IsEmpty() ? NAME_None : FName(*Bone.Value);
+		if (SkeletonParent != FbxParent)
+		{
+			OutMismatch = FString::Printf(TEXT("bone '%s' has parent '%s' in the FBX but '%s' in the skeleton"), *Bone.Key,
+				FbxParent.IsNone() ? TEXT("(none)") : *FbxParent.ToString(), SkeletonParent.IsNone() ? TEXT("(none)") : *SkeletonParent.ToString());
+			return false;
+		}
+	}
+	return true;
+}
+
 UObject* FDazToUnrealModule::ImportFBXAsset(const DazToUnrealImportData& DazImportData)
 {
 	 static FAssetToolsModule& AssetToolsModule = FModuleManager::GetModuleChecked<FAssetToolsModule>("AssetTools");
@@ -2075,6 +2106,31 @@ UObject* FDazToUnrealModule::ImportFBXAsset(const DazToUnrealImportData& DazImpo
 		 const FString AssetName = FPaths::GetBaseFilename(NewFBXPath);
 		 const FString ExistingObjectPath = FbxImportData->DestinationPath / AssetName + TEXT(".") + AssetName;
 		 ExistingMesh = Cast<USkeletalMesh>(StaticLoadObject(USkeletalMesh::StaticClass(), nullptr, *ExistingObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet));
+	 }
+
+	 // Never let an import regenerate an existing skeleton. When a mesh's bone hierarchy doesn't merge into its
+	 // target skeleton, the FBX importer offers to rebuild the skeleton from that mesh, and an unattended import
+	 // accepts. That replaced the shared Genesis 8 Female skeleton's bone tree with a hair's 28 bones once. The
+	 // engine has no option to forbid it, so check the hierarchy first and refuse the import when it doesn't merge.
+	 if (DazImportData.AssetType == DazAssetType::SkeletalMesh)
+	 {
+		  const USkeleton* TargetSkeleton = ExistingMesh ? ExistingMesh->GetSkeleton() : FbxFactory->ImportUI->Skeleton.Get();
+		  if (TargetSkeleton)
+		  {
+			   TMap<FString, FString> FbxBoneParents;
+			   FString Mismatch;
+			   if (!FDazToUnrealFbx::ReadBoneParents(NewFBXPath, FbxBoneParents))
+			   {
+					Mismatch = TEXT("the FBX's bone hierarchy could not be read");
+			   }
+			   if (!Mismatch.IsEmpty() || !FbxBonesMergeIntoSkeleton(FbxBoneParents, TargetSkeleton, Mismatch))
+			   {
+					UE_LOG(LogDazToUnreal, Error, TEXT("DazToUnreal: not importing %s: it does not merge into skeleton %s without regenerating it: %s"),
+						 *NewFBXPath, *TargetSkeleton->GetPathName(), *Mismatch);
+					FbxFactory->RemoveFromRoot();
+					return nullptr;
+			   }
+		  }
 	 }
 
 	 TArray<UObject*> ImportedAssets;
