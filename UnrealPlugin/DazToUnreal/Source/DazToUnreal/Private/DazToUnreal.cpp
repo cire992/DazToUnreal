@@ -45,6 +45,8 @@
 #include "Factories/FbxTextureImportData.h"
 #include "Factories/FbxSkeletalMeshImportData.h"
 #include "EditorFramework/AssetImportData.h"
+#include "Factories/ReimportFbxSkeletalMeshFactory.h"
+#include "EditorReimportHandler.h"
 #include "Interfaces/IPluginManager.h"
 #include "ContentBrowserModule.h"
 #include "IContentBrowserSingleton.h"
@@ -2060,41 +2062,46 @@ UObject* FDazToUnrealModule::ImportFBXAsset(const DazToUnrealImportData& DazImpo
 		 FbxImportData->DestinationPath = CachedSettings->AnimationImportDirectory.Path;
 	 }
 
-	 // Re-import from the same FBX file: when the existing mesh's stored source file is this file, the engine
-	 // switches to an "atomic reimport" through the reimport manager. That path ignores the options set above
-	 // and, once the mesh carries Interchange import data (UE 5.8), re-imports it with default FBX options,
-	 // which drops every morph target. Forget the stored source file so this import takes the normal
-	 // replace-existing path with the bridge's options, the same as a re-import from a new export folder.
-	 if (DazImportData.AssetType == DazAssetType::SkeletalMesh && FbxImportData->bReplaceExisting)
+	 // Re-import onto an existing skeletal mesh. Given an existing asset, UFbxFactory does not import with the
+	 // options set above: it hands the asset to the reimport manager, which picks a handler (legacy FBX or
+	 // Interchange) and takes the options from the asset's stored import data, whatever an earlier import left
+	 // there. A legacy re-import over stored default options drops every morph target; an Interchange re-import
+	 // cannot merge the bone tree into the shared skeleton. So the bridge re-imports the mesh itself: it stores
+	 // its own options on the mesh and runs the legacy FBX skeletal mesh re-import with them, whatever the
+	 // stored source file was (the same FBX or a new export folder).
+	 USkeletalMesh* ExistingMesh = nullptr;
+	 if (DazImportData.AssetType == DazAssetType::SkeletalMesh && FbxImportData->bReplaceExisting && !CachedSettings->ShowFBXImportDialog)
 	 {
 		 const FString AssetName = FPaths::GetBaseFilename(NewFBXPath);
 		 const FString ExistingObjectPath = FbxImportData->DestinationPath / AssetName + TEXT(".") + AssetName;
-		 if (USkeletalMesh* ExistingMesh = Cast<USkeletalMesh>(StaticLoadObject(USkeletalMesh::StaticClass(), nullptr, *ExistingObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet)))
-		 {
-			 if (UAssetImportData* ExistingImportData = ExistingMesh->GetAssetImportData())
-			 {
-				 const FString NewFullPath = FPaths::ConvertRelativePathToFull(NewFBXPath);
-				 bool bSameSource = false;
-				 for (const FString& SourceFile : ExistingImportData->ExtractFilenames())
-				 {
-					 if (FPaths::IsSamePath(FPaths::ConvertRelativePathToFull(SourceFile), NewFullPath))
-					 {
-						 bSameSource = true;
-						 break;
-					 }
-				 }
-				 if (bSameSource)
-				 {
-					 UE_LOG(LogDazToUnreal, Log, TEXT("DazToUnreal: %s was imported from this FBX before; re-importing it with the bridge's options instead of an atomic reimport"), *ExistingObjectPath);
-					 ExistingImportData->Modify();
-					 ExistingImportData->SourceData = FAssetImportInfo();
-				 }
-			 }
-		 }
+		 ExistingMesh = Cast<USkeletalMesh>(StaticLoadObject(USkeletalMesh::StaticClass(), nullptr, *ExistingObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet));
 	 }
 
 	 TArray<UObject*> ImportedAssets;
-	 if (CachedSettings->ShowFBXImportDialog)
+	 if (ExistingMesh)
+	 {
+		  const FString NewFullPath = FPaths::ConvertRelativePathToFull(NewFBXPath);
+		  UE_LOG(LogDazToUnreal, Log, TEXT("DazToUnreal: re-importing %s from %s with the bridge's FBX options"), *ExistingMesh->GetPathName(), *NewFullPath);
+		  UFbxSkeletalMeshImportData* BridgeImportData = DuplicateObject<UFbxSkeletalMeshImportData>(FbxFactory->ImportUI->SkeletalMeshImportData, ExistingMesh);
+		  BridgeImportData->Update(NewFullPath);
+		  ExistingMesh->Modify();
+		  ExistingMesh->SetAssetImportData(BridgeImportData);
+
+		  UReimportFbxSkeletalMeshFactory* ReimportFactory = NewObject<UReimportFbxSkeletalMeshFactory>();
+		  ReimportFactory->AddToRoot();
+		  const bool bReimported = FReimportManager::Instance()->Reimport(ExistingMesh, /*bAskForNewFileIfMissing*/ false, /*bShowNotification*/ false,
+			  NewFullPath, ReimportFactory, INDEX_NONE, /*bForceNewFile*/ false, /*bAutomated*/ true);
+		  ReimportFactory->RemoveFromRoot();
+		  if (bReimported)
+		  {
+			   ImportedAssets.Add(ExistingMesh);
+		  }
+		  else
+		  {
+			   UE_LOG(LogDazToUnreal, Warning, TEXT("DazToUnreal: re-import of %s from %s failed"), *ExistingMesh->GetPathName(), *NewFullPath);
+		  }
+	 }
+	 else if (CachedSettings->ShowFBXImportDialog)
 	 {
 		  UAssetImportTask* AssetImportTask = NewObject<UAssetImportTask>();
 		  AssetImportTask->Filename = FbxImportData->Filenames[0];
