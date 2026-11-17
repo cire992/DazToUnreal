@@ -15,6 +15,7 @@
 #include "DazToUnrealMLDeformer.h"
 #include "DazToUnrealBlueprintUtils.h"
 #include "DazToUnrealRetarget.h"
+#include "DazToUnrealTextureLibrary.h"
 
 #include "EditorLevelLibrary.h"
 #include "LevelEditor.h"
@@ -622,6 +623,9 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 		 }
 	 }
 
+	 // Shared texture library ("Texture Library" in the .dtu); empty means textures are imported per asset as before
+	 const FString TextureLibraryRoot = FDazToUnrealTextureLibrary::GetRoot(JsonObject);
+
 	 // Build AssetIDLookup
 	 FString AssetID = JsonObject->GetStringField(TEXT("Asset ID"));
 	 if (!AssetIDLookup.Contains(AssetID))
@@ -866,6 +870,9 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 	 TMap<FString, FString> TextureFileSourceToTarget;
 	 TArray<FString> IntermediateMaterials;
 	 m_sourceTextureLookupTable.Reset();
+	 // Texture files by use, for the shared texture library's sRGB setting
+	 TSet<FString> LibraryColourTextures;
+	 TSet<FString> LibraryCutoutTextures;
 
 	 // Find duplicate materials
 	 TMap<TSharedPtr<FJsonValue>, TSharedPtr<FJsonValue>> DuplicateMaterials;
@@ -1097,6 +1104,17 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 						lookupInfo.bIsCutOut = true;
 						m_sourceTextureLookupTable.Add(TextureName, lookupInfo);
                     }
+					if (!TextureName.IsEmpty())
+					{
+						if (Property.Name == TEXT("Cutout Opacity"))
+						{
+							LibraryCutoutTextures.Add(TexturePath);
+						}
+						else if (Property.Type == TEXT("Color"))
+						{
+							LibraryColourTextures.Add(TexturePath);
+						}
+					}
 
 					// Properties that end with Enabled are switches for functionality
 					if (Property.Name.EndsWith(TEXT(" Enable")))
@@ -1645,8 +1663,30 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 	 {
 		  TArray<FString> TexturesFilesToImport;
 		  m_targetTextureLookupTable.Reset();
+
+		  // Shared texture library: one texture per Daz file, reused while unchanged
+		  TMap<FString, FString> LibraryObjectPaths;
+		  TArray<UObject*> LibraryDisableSRGB;
+		  if (!TextureLibraryRoot.IsEmpty())
+		  {
+				TArray<FDazLibraryTextureRequest> Requests;
+				for (const TPair<FString, FString>& TexturePair : TextureFileSourceToTarget)
+				{
+					 FDazLibraryTextureRequest& Request = Requests.AddDefaulted_GetRef();
+					 Request.SourceFile = TexturePair.Key;
+					 Request.bColour = LibraryColourTextures.Contains(TexturePair.Key);
+					 Request.bCutout = LibraryCutoutTextures.Contains(TexturePair.Key);
+				}
+				LibraryObjectPaths = FDazToUnrealTextureLibrary::Sync(TextureLibraryRoot, Requests, LibraryDisableSRGB);
+		  }
+
 		  for (auto TexturePair : TextureFileSourceToTarget)
 		  {
+				// Files the library couldn't take are imported the old way
+				if (LibraryObjectPaths.Contains(TexturePair.Key))
+				{
+					 continue;
+				}
 				FString SourceFileName = TexturePair.Key;
 				FString TargetFileName = ImportCharacterTexturesFolder / TexturePair.Value + FPaths::GetExtension(SourceFileName, true);
 
@@ -1662,7 +1702,37 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 				PlatformFile.CopyFile(*TargetFileName, *SourceFileName);
 				TexturesFilesToImport.Add(TargetFileName);
 		  }
-		  ImportTextureAssets(TexturesFilesToImport, CharacterTexturesFolder);
+		  if (TextureLibraryRoot.IsEmpty() || TexturesFilesToImport.Num() > 0)
+		  {
+				ImportTextureAssets(TexturesFilesToImport, CharacterTexturesFolder);
+		  }
+
+		  if (LibraryObjectPaths.Num() > 0)
+		  {
+				// After ImportTextureAssets, which empties the deferred sRGB list
+				FDazToUnrealModule::TextureListToDisableSRGB.Append(LibraryDisableSRGB);
+
+				// Material instances point at the library textures (full object paths,
+				// which FDazToUnrealMaterials::CreateMaterial already loads as they are)
+				TMap<FString, FString> ObjectPathByTextureName;
+				for (const TPair<FString, FString>& LibraryPair : LibraryObjectPaths)
+				{
+					 ObjectPathByTextureName.Add(TextureFileSourceToTarget[LibraryPair.Key], LibraryPair.Value);
+				}
+				for (TPair<FString, TArray<FDUFTextureProperty>>& MaterialPair : MaterialProperties)
+				{
+					 for (FDUFTextureProperty& Property : MaterialPair.Value)
+					 {
+						  if (Property.Type == TEXT("Texture"))
+						  {
+								if (const FString* ObjectPath = ObjectPathByTextureName.Find(Property.Value))
+								{
+									 Property.Value = *ObjectPath;
+								}
+						  }
+					 }
+				}
+		  }
 	 }
 
 	 // Create Intermediate Materials
