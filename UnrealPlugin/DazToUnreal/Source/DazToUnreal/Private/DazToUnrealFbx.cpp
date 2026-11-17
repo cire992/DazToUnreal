@@ -142,6 +142,49 @@ FString FDazToUnrealFbx::GetObjectNameForMaterial(FbxSurfaceMaterial* Material)
 
 // Some accesories attached in ways like using the DzRigidFollowNode become additional meshes.
 // This function attached them to the skeleton of the primary mesh so the don't break the skeleton.
+bool FDazToUnrealFbx::ReadBoneParents(const FString& FbxFilePath, TMap<FString, FString>& OutBoneParents)
+{
+	OutBoneParents.Reset();
+	FbxManager* SdkManager = FbxManager::Create();
+	FbxIOSettings* IOSettings = FbxIOSettings::Create(SdkManager, IOSROOT);
+	SdkManager->SetIOSettings(IOSettings);
+
+	FbxImporter* Importer = FbxImporter::Create(SdkManager, "");
+	bool bRead = Importer->Initialize(TCHAR_TO_UTF8(*FbxFilePath), -1, SdkManager->GetIOSettings());
+	FbxScene* Scene = nullptr;
+	if (bRead)
+	{
+		Scene = FbxScene::Create(SdkManager, "");
+		bRead = Importer->Import(Scene);
+	}
+	Importer->Destroy();
+
+	if (bRead)
+	{
+		CollectBoneParents(Scene->GetRootNode(), FString(), OutBoneParents);
+	}
+	SdkManager->Destroy();
+	return bRead;
+}
+
+void FDazToUnrealFbx::CollectBoneParents(FbxNode* Node, const FString& ParentBone, TMap<FString, FString>& OutBoneParents)
+{
+	if (Node == nullptr) return;
+
+	FString ParentForChildren = ParentBone;
+	FbxNodeAttribute* Attr = Node->GetNodeAttribute();
+	if (Attr && Attr->GetAttributeType() == FbxNodeAttribute::eSkeleton)
+	{
+		const FString BoneName = UTF8_TO_TCHAR(Node->GetName());
+		OutBoneParents.Add(BoneName, ParentBone);
+		ParentForChildren = BoneName;
+	}
+	for (int ChildIndex = 0; ChildIndex < Node->GetChildCount(); ++ChildIndex)
+	{
+		CollectBoneParents(Node->GetChild(ChildIndex), ParentForChildren, OutBoneParents);
+	}
+}
+
 void FDazToUnrealFbx::ParentAdditionalSkeletalMeshes(FbxScene* Scene)
 {
 	FbxNode* RootNode = Scene->GetRootNode();
