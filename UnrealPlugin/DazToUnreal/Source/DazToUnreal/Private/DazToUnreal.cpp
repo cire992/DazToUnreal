@@ -523,6 +523,54 @@ bool FDazToUnrealModule::Tick(float DeltaTime)
 	return true;
 }
 
+// The figure owns its skeleton's rest pose. A skeleton keeps the rest pose of whichever mesh created (or
+// regenerated) it: later imports onto it only add the bones it lacks and never change existing ones. Wearables
+// (lashes, brows, hair, clothing) carry bones they have no skin weights on, and the bridge's bone-rotation fix
+// (FixClusterTranformLinks) only re-orients weighted bones, so in a wearable those bones have plain rotations
+// without Daz's joint orientation, and some sit at other positions. A skeleton made from a wearable keeps them.
+// So every import of a figure sets its own skeleton's reference pose from the figure's mesh, as the Skeleton
+// editor's "Update Skeleton RefPose" does: every bone the figure has gets the figure's rest transform, and bones
+// only wearables have keep theirs. A skeleton named for another figure (CharacterTypeMapping can share one
+// skeleton between figures, e.g. Genesis 8 Female and Male) is left alone with a warning.
+static void SetSkeletonRestPoseFromFigure(USkeletalMesh* FigureMesh)
+{
+#if ENGINE_MAJOR_VERSION > 4
+	USkeleton* Skeleton = FigureMesh->GetSkeleton();
+#else
+	USkeleton* Skeleton = FigureMesh->Skeleton;
+#endif
+	if (!Skeleton)
+	{
+		return;
+	}
+	if (Skeleton->GetName() != FigureMesh->GetName() + TEXT("_Skeleton"))
+	{
+		UE_LOG(LogDazToUnreal, Warning, TEXT("DazToUnreal: not setting the rest pose of skeleton %s from %s: the skeleton was made for another asset"),
+			*Skeleton->GetPathName(), *FigureMesh->GetPathName());
+		return;
+	}
+
+	const TArray<FTransform> Before = Skeleton->GetReferenceSkeleton().GetRefBonePose();
+	Skeleton->Modify();
+	Skeleton->UpdateReferencePoseFromMesh(FigureMesh);
+	const TArray<FTransform>& After = Skeleton->GetReferenceSkeleton().GetRefBonePose();
+
+	int32 NumChanged = 0;
+	for (int32 BoneIndex = 0; BoneIndex < After.Num(); ++BoneIndex)
+	{
+		if (!Before.IsValidIndex(BoneIndex) || !Before[BoneIndex].Equals(After[BoneIndex], 1.e-4f))
+		{
+			++NumChanged;
+		}
+	}
+	if (NumChanged > 0)
+	{
+		Skeleton->MarkPackageDirty();
+	}
+	UE_LOG(LogDazToUnreal, Log, TEXT("DazToUnreal: set the rest pose of skeleton %s from figure %s (%d of %d bones changed)"),
+		*Skeleton->GetPathName(), *FigureMesh->GetPathName(), NumChanged, After.Num());
+}
+
 UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, const FString& FileName)
 {
 	FScopedSlowTask Progress(10.0f, LOCTEXT("CreatingAutoJCMControlRig", "Importing from Daz"));
@@ -1718,6 +1766,20 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 	 bool bSetPostProcessAnimation = !FDazToUnrealMorphs::IsAutoJCMImport(JsonObject);
 	 ImportData.bSetPostProcessAnimation = bSetPostProcessAnimation;
 	 UObject* NewObject = ImportFBXAsset(ImportData);
+
+	 // A figure (not a wearable) sets its skeleton's rest pose, before the control rigs below read it.
+	 if (AssetType == DazAssetType::SkeletalMesh && ImportData.SkeletonTarget == EDazSkeletonTarget::None)
+	 {
+		 FString ContentType;
+		 JsonObject->TryGetStringField(TEXT("Content Type"), ContentType);
+		 if (ContentType == TEXT("Actor/Character") || ContentType == TEXT("Actor"))
+		 {
+			 if (USkeletalMesh* FigureMesh = Cast<USkeletalMesh>(NewObject))
+			 {
+				 SetSkeletonRestPoseFromFigure(FigureMesh);
+			 }
+		 }
+	 }
 
 	 // If this is a Pose transfer, an AnimSequence was created.  Make a PoseAsset from it.
 	 if (AssetType == DazAssetType::Pose)
