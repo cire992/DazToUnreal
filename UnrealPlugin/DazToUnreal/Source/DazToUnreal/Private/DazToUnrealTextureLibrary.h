@@ -46,8 +46,11 @@ public:
 	 * Imports each requested file into the library, or reuses the library texture when
 	 * its import source and hash match. Returns SourceFile -> texture object path for every
 	 * file that has a library texture; files missing from the map failed and should be
-	 * imported the old way. Textures that need sRGB turned off are added to OutDisableSRGB
-	 * (the bridge's deferred list) unless running as a commandlet, where it's done at once.
+	 * imported the old way. Textures that need sRGB turned off are queued for
+	 * FlushDeferredSRGB, or changed at once when running as a commandlet.
 	 */
-	static TMap<FString, FString> Sync(const FString& Root, const TArray<FDazLibraryTextureRequest>& Requests, TArray<UObject*>& OutDisableSRGB);
+	static TMap<FString, FString> Sync(const FString& Root, const TArray<FDazLibraryTextureRequest>& Requests);
+
+	/** Turns sRGB off on the textures Sync queued; called from the bridge's Tick, a tick after the imports */
+	static void FlushDeferredSRGB();
 };

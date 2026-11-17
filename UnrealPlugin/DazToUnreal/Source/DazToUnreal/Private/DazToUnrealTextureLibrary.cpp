@@ -74,21 +74,45 @@ namespace DazToUnrealTextureLibraryPrivate
 		return File.Timestamp == IFileManager::Get().GetTimeStamp(*SourceFile);
 	}
 
-	void DisableSRGB(UTexture* Texture, TArray<UObject*>& OutDisableSRGB)
+	/**
+	 * Library textures waiting for sRGB off. Kept apart from the bridge's own list, which
+	 * ImportTextureAssets empties, so a later import in the same tick can't drop them.
+	 */
+	TArray<TWeakObjectPtr<UTexture>> PendingSRGBOff;
+
+	void ApplySRGBOff(UTexture* Texture)
+	{
+		Texture->PreEditChange(nullptr);
+		Texture->SRGB = false;
+		Texture->PostEditChange();
+		Texture->MarkPackageDirty();
+	}
+
+	void DisableSRGB(UTexture* Texture)
 	{
 		if (IsRunningCommandlet())
 		{
-			Texture->PreEditChange(nullptr);
-			Texture->SRGB = false;
-			Texture->PostEditChange();
-			Texture->MarkPackageDirty();
+			ApplySRGBOff(Texture);
 		}
 		else
 		{
 			// Deferred one tick like the bridge's own imports (see FDazToUnrealModule::Tick)
-			OutDisableSRGB.Add(Texture);
+			PendingSRGBOff.AddUnique(Texture);
 		}
 	}
+}
+
+void FDazToUnrealTextureLibrary::FlushDeferredSRGB()
+{
+	using namespace DazToUnrealTextureLibraryPrivate;
+	for (const TWeakObjectPtr<UTexture>& Texture : PendingSRGBOff)
+	{
+		if (Texture.IsValid() && Texture->SRGB)
+		{
+			ApplySRGBOff(Texture.Get());
+		}
+	}
+	PendingSRGBOff.Empty();
 }
 
 FString FDazToUnrealTextureLibrary::GetRoot(const TSharedPtr<FJsonObject>& JsonObject)
@@ -151,7 +175,7 @@ void FDazToUnrealTextureLibrary::MakeLibraryPath(const FString& Root, const FStr
 	}
 }
 
-TMap<FString, FString> FDazToUnrealTextureLibrary::Sync(const FString& Root, const TArray<FDazLibraryTextureRequest>& Requests, TArray<UObject*>& OutDisableSRGB)
+TMap<FString, FString> FDazToUnrealTextureLibrary::Sync(const FString& Root, const TArray<FDazLibraryTextureRequest>& Requests)
 {
 	using namespace DazToUnrealTextureLibraryPrivate;
 	TMap<FString, FString> Result;
@@ -244,15 +268,18 @@ TMap<FString, FString> FDazToUnrealTextureLibrary::Sync(const FString& Root, con
 		{
 			UE_LOG(LogDazToUnreal, Warning, TEXT("DazToUnreal: Texture library: sRGB conflict: %s is both a colour map and a cutout in this import; the cutout wins (sRGB off)."), *ObjectPath);
 		}
-		if (Request.bCutout && Texture->SRGB)
+		// A texture already queued for sRGB off (an earlier import this tick) counts as linear
+		const bool bPendingOff = PendingSRGBOff.Contains(Texture);
+		const bool bLinear = !Texture->SRGB || bPendingOff;
+		if (Request.bCutout && !bLinear)
 		{
 			if (Texture == Existing)
 			{
 				UE_LOG(LogDazToUnreal, Warning, TEXT("DazToUnreal: Texture library: sRGB change: %s was sRGB and this import uses it as a cutout; turning sRGB off for every material that uses it."), *ObjectPath);
 			}
-			DisableSRGB(Texture, OutDisableSRGB);
+			DisableSRGB(Texture);
 		}
-		else if (Request.bColour && !Request.bCutout && !Texture->SRGB && Texture->CompressionSettings != TC_Normalmap)
+		else if (Request.bColour && !Request.bCutout && bLinear && Texture->CompressionSettings != TC_Normalmap)
 		{
 			UE_LOG(LogDazToUnreal, Warning, TEXT("DazToUnreal: Texture library: sRGB conflict: %s is linear (a cutout elsewhere) and this import uses it as colour; leaving it linear (the cutout wins)."), *ObjectPath);
 		}

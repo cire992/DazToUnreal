@@ -464,6 +464,8 @@ bool FDazToUnrealModule::Tick(float DeltaTime)
 			}
 			FDazToUnrealModule::TextureListToDisableSRGB.Empty();
 		}
+		// The shared texture library keeps its own list (ImportTextureAssets empties the one above)
+		FDazToUnrealTextureLibrary::FlushDeferredSRGB();
 
 		// Check from messages from the Daz Studio plugin
 		uint32 BytesPending = 0;
@@ -1666,7 +1668,6 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 
 		  // Shared texture library: one texture per Daz file, reused while unchanged
 		  TMap<FString, FString> LibraryObjectPaths;
-		  TArray<UObject*> LibraryDisableSRGB;
 		  if (!TextureLibraryRoot.IsEmpty())
 		  {
 				TArray<FDazLibraryTextureRequest> Requests;
@@ -1677,7 +1678,7 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 					 Request.bColour = LibraryColourTextures.Contains(TexturePair.Key);
 					 Request.bCutout = LibraryCutoutTextures.Contains(TexturePair.Key);
 				}
-				LibraryObjectPaths = FDazToUnrealTextureLibrary::Sync(TextureLibraryRoot, Requests, LibraryDisableSRGB);
+				LibraryObjectPaths = FDazToUnrealTextureLibrary::Sync(TextureLibraryRoot, Requests);
 		  }
 
 		  for (auto TexturePair : TextureFileSourceToTarget)
@@ -1709,11 +1710,8 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 
 		  if (LibraryObjectPaths.Num() > 0)
 		  {
-				// After ImportTextureAssets, which empties the deferred sRGB list
-				FDazToUnrealModule::TextureListToDisableSRGB.Append(LibraryDisableSRGB);
-
 				// Material instances point at the library textures (full object paths,
-				// which FDazToUnrealMaterials::CreateMaterial already loads as they are)
+				// which FDazToUnrealMaterials::CreateMaterial loads as they are)
 				TMap<FString, FString> ObjectPathByTextureName;
 				for (const TPair<FString, FString>& LibraryPair : LibraryObjectPaths)
 				{
