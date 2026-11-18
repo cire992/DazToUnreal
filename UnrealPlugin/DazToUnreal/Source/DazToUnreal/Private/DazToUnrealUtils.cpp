@@ -132,6 +132,13 @@ FString FDazToUnrealUtils::GetDTUPathForModel(FSoftObjectPath MeshObjectPath)
 
 FSoftObjectPath FDazToUnrealUtils::GetSkeletonForImport(const DazToUnrealImportData& DazImportData)
 {
+	// A skeleton named in the .dtu ("Skeleton") wins over the per-character-type lookup below, and the lookup's
+	// settings maps are left untouched
+	if (!DazImportData.DtuSkeleton.IsNull())
+	{
+		return DazImportData.DtuSkeleton;
+	}
+
 	UDazToUnrealSettings* CachedSettings = GetMutableDefault<UDazToUnrealSettings>();
 
 	USkeleton* Skeleton = nullptr;

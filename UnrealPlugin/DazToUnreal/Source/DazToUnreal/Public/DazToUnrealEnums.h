@@ -55,6 +55,10 @@ struct DazToUnrealImportData
 	EDazSkeletonTarget SkeletonTarget = EDazSkeletonTarget::None;
 	bool bFixTwistBones = false;
 	bool bFaceCharacterRight = false;
+	// The skeleton named by the .dtu's "Skeleton" field, already checked to load (see ImportFromDaz). When set, it
+	// is the skeleton for import in place of the CharacterTypeMapping / OtherSkeletons / SkeletonsWithTwistFix
+	// lookup, and it is never recorded into those settings. Empty without the field.
+	FSoftObjectPath DtuSkeleton;
 	TMap<FName, FName> MaterialSlotNameToMaterialName;
 	// The material instance this import made for each material slot, by slot name. A re-import puts these
 	// on the existing mesh's slots (see ImportFBXAsset).

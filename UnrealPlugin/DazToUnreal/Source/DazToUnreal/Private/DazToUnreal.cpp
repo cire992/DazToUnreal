@@ -711,6 +711,30 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 		 UE_LOG(LogDazToUnreal, Log, TEXT("DazToUnreal: asset folder %s (from the .dtu)"), *AssetFolder);
 	 }
 
+	 // Skeleton ("Skeleton" in the .dtu): the object path of the skeleton to import onto, such as
+	 // /DazAssets/Library/data/DAZ_3D/Genesis_8/Female/Genesis8Female/A_GENESIS_8_FEMALE_Skeleton.A_GENESIS_8_FEMALE_Skeleton.
+	 // It replaces the lookup by character type (CharacterTypeMapping, OtherSkeletons, SkeletonsWithTwistFix), so a
+	 // new wearable doesn't need a settings entry, and it is never recorded into those settings. A skeleton that
+	 // doesn't load refuses the import rather than letting the FBX importer make a new one. Without the field
+	 // nothing below changes.
+	 FString DtuSkeletonString;
+	 FSoftObjectPath DtuSkeletonPath;
+	 if (JsonObject->TryGetStringField(TEXT("Skeleton"), DtuSkeletonString))
+	 {
+		 DtuSkeletonString = DtuSkeletonString.TrimStartAndEnd();
+	 }
+	 if (!DtuSkeletonString.IsEmpty())
+	 {
+		 DtuSkeletonPath = FSoftObjectPath(DtuSkeletonString);
+		 if (DtuSkeletonPath.IsNull() || !Cast<USkeleton>(DtuSkeletonPath.TryLoad()))
+		 {
+			 UE_LOG(LogDazToUnreal, Error, TEXT("DazToUnreal: not importing %s: its skeleton \"%s\" (from the .dtu) doesn't load as a Skeleton (it needs an object path, /Path/To/Name.Name)"),
+				 *AssetName, *DtuSkeletonString);
+			 return nullptr;
+		 }
+		 UE_LOG(LogDazToUnreal, Log, TEXT("DazToUnreal: skeleton %s (from the .dtu)"), *DtuSkeletonPath.ToString());
+	 }
+
 	 // Materials-only import ("Materials Only" in the .dtu): textures and material instances, then stop
 	 // before the FBX import, so a materials preset (a skin) compiles as its own asset. Without the field
 	 // nothing below changes.
@@ -851,6 +875,22 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 	 {
 		 ImportData.bCreateUniqueSkeleton = true;
 		 ImportData.bFixTwistBones = true;
+	 }
+	 if (!DtuSkeletonPath.IsNull())
+	 {
+		 // The Epic and MetaHuman conversions start from a skeleton of the character's own and change it, so they
+		 // can't run on a shared skeleton named in the .dtu
+		 if (ImportData.SkeletonTarget != EDazSkeletonTarget::None)
+		 {
+			 UE_LOG(LogDazToUnreal, Error, TEXT("DazToUnreal: not importing %s: its .dtu names skeleton %s and also asks to convert to %s, which needs a skeleton of its own"),
+				 *AssetName, *DtuSkeletonPath.ToString(), ImportData.SkeletonTarget == EDazSkeletonTarget::MetaHuman ? TEXT("MetaHuman") : TEXT("the Epic skeleton"));
+			 return nullptr;
+		 }
+		 if (ImportData.bCreateUniqueSkeleton)
+		 {
+			 UE_LOG(LogDazToUnreal, Log, TEXT("DazToUnreal: CreateUniqueSkeleton ignored: the .dtu names skeleton %s"), *DtuSkeletonPath.ToString());
+		 }
+		 ImportData.DtuSkeleton = DtuSkeletonPath;
 	 }
 	 if (!JsonObject->TryGetBoolField(TEXT("FaceCharacterRight"), ImportData.bFaceCharacterRight))
 	 {
@@ -2286,6 +2326,16 @@ UObject* FDazToUnrealModule::ImportFBXAsset(const DazToUnrealImportData& DazImpo
 	 FSoftObjectPath SkeletonPath = FDazToUnrealUtils::GetSkeletonForImport(DazImportData);
 	 USkeleton* Skeleton = Cast<USkeleton>(SkeletonPath.TryLoad());
 
+	 // A skeleton named in the .dtu was checked to load in ImportFromDaz. If it no longer does, refuse: without a
+	 // skeleton the FBX importer makes a new one, which is what the field is there to prevent.
+	 if (!DazImportData.DtuSkeleton.IsNull() && !Skeleton)
+	 {
+		  UE_LOG(LogDazToUnreal, Error, TEXT("DazToUnreal: not importing %s: its skeleton %s (from the .dtu) doesn't load"),
+			   *NewFBXPath, *DazImportData.DtuSkeleton.ToString());
+		  FbxFactory->RemoveFromRoot();
+		  return nullptr;
+	 }
+
 	 UFbxImportUI* ImportUI = NewObject<UFbxImportUI>();
 	 FbxFactory->SetDetectImportTypeOnImport(false);
 	 FbxFactory->ImportUI->TextureImportData->MaterialSearchLocation = EMaterialSearchLocation::UnderRoot;
@@ -2355,6 +2405,15 @@ UObject* FDazToUnrealModule::ImportFBXAsset(const DazToUnrealImportData& DazImpo
 		 const FString AssetName = FPaths::GetBaseFilename(NewFBXPath);
 		 const FString ExistingObjectPath = FbxImportData->DestinationPath / AssetName + TEXT(".") + AssetName;
 		 ExistingMesh = Cast<USkeletalMesh>(StaticLoadObject(USkeletalMesh::StaticClass(), nullptr, *ExistingObjectPath, nullptr, LOAD_NoWarn | LOAD_Quiet));
+	 }
+
+	 // A re-import keeps the existing mesh's skeleton, even when the .dtu names another one: the re-import merges
+	 // into the mesh's own skeleton and the guard below checks against that. Say so when the two differ.
+	 if (ExistingMesh && !DazImportData.DtuSkeleton.IsNull() && ExistingMesh->GetSkeleton() != Skeleton)
+	 {
+		  UE_LOG(LogDazToUnreal, Warning, TEXT("DazToUnreal: re-importing %s onto its existing skeleton %s, not the skeleton %s from the .dtu"),
+			   *ExistingMesh->GetPathName(), ExistingMesh->GetSkeleton() ? *ExistingMesh->GetSkeleton()->GetPathName() : TEXT("(none)"),
+			   *DazImportData.DtuSkeleton.ToString());
 	 }
 
 	 // Never let an import regenerate an existing skeleton. When a mesh's bone hierarchy doesn't merge into its
