@@ -628,6 +628,26 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 	 // Shared texture library ("Texture Library" in the .dtu); empty means textures are imported per asset as before
 	 const FString TextureLibraryRoot = FDazToUnrealTextureLibrary::GetRoot(JsonObject);
 
+	 // Materials-only import ("Materials Only" in the .dtu): textures and material instances, then stop
+	 // before the FBX import, so a materials preset (a skin) compiles as its own asset. Without the field
+	 // nothing below changes.
+	 bool bMaterialsOnly = false;
+	 JsonObject->TryGetBoolField(TEXT("Materials Only"), bMaterialsOnly);
+	 if (bMaterialsOnly)
+	 {
+		 const TArray<TSharedPtr<FJsonValue>>* MaterialsOnlyList = nullptr;
+		 if (AssetType != DazAssetType::SkeletalMesh && AssetType != DazAssetType::StaticMesh)
+		 {
+			 UE_LOG(LogDazToUnreal, Error, TEXT("DazToUnreal: not importing %s: a materials-only import needs a SkeletalMesh or StaticMesh asset type"), *AssetName);
+			 return nullptr;
+		 }
+		 if (!JsonObject->TryGetArrayField(TEXT("Materials"), MaterialsOnlyList) || MaterialsOnlyList->Num() == 0)
+		 {
+			 UE_LOG(LogDazToUnreal, Error, TEXT("DazToUnreal: not importing %s: a materials-only .dtu has no materials"), *AssetName);
+			 return nullptr;
+		 }
+	 }
+
 	 // Build AssetIDLookup
 	 FString AssetID = JsonObject->GetStringField(TEXT("Asset ID"));
 	 if (!AssetIDLookup.Contains(AssetID))
@@ -1827,6 +1847,14 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 				}
 
 		  }
+	 }
+
+	 // A materials-only import stops here: no mesh, skeleton, morphs, control rigs, JCMs or post-process
+	 if (bMaterialsOnly)
+	 {
+		 UE_LOG(LogDazToUnreal, Log, TEXT("DazToUnreal: materials-only import of %s: %d material instances in %s, no mesh imported"),
+			 *AssetName, MaterialNames.Num(), *CharacterMaterialFolder);
+		 return nullptr;
 	 }
 
 	 // Import FBX
