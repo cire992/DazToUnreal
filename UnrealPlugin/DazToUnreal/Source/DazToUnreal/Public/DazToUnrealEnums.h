@@ -1,5 +1,7 @@
 #pragma once
 
+#include "UObject/SoftObjectPath.h"
+
 enum DazCharacterType
 {
 	Genesis1,
@@ -54,4 +56,7 @@ struct DazToUnrealImportData
 	bool bFixTwistBones = false;
 	bool bFaceCharacterRight = false;
 	TMap<FName, FName> MaterialSlotNameToMaterialName;
+	// The material instance this import made for each material slot, by slot name. A re-import puts these
+	// on the existing mesh's slots (see ImportFBXAsset).
+	TMap<FName, FSoftObjectPath> MaterialBySlotName;
 };

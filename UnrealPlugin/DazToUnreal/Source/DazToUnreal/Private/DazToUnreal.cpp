@@ -526,6 +526,62 @@ bool FDazToUnrealModule::Tick(float DeltaTime)
 	return true;
 }
 
+// Notes the material instance an import made for a material slot. The bridge names each instance after the FBX
+// material, and the FBX material name is the slot name.
+static void RememberSlotMaterial(DazToUnrealImportData& ImportData, const FString& SlotName, const UMaterialInstanceConstant* MaterialInstance)
+{
+	if (MaterialInstance)
+	{
+		ImportData.MaterialBySlotName.Add(FName(*SlotName), FSoftObjectPath(MaterialInstance));
+	}
+}
+
+// A first import finds the bridge's material instance for each slot by name (bImportMaterials off, with a
+// MaterialSearchLocation, in ImportFBXAsset). A re-import does not: it keeps the material of each slot name the mesh
+// already had and gives every new slot name the engine's default material (WorldGridMaterial). So after a re-import,
+// every slot this import made a material instance for gets that instance, as a first import would have given it.
+// Slots it made none for keep what the re-import left.
+static void SetSlotMaterialsFromImport(USkeletalMesh* SkeletalMesh, const DazToUnrealImportData& ImportData)
+{
+#if ENGINE_MAJOR_VERSION > 4
+	TArray<TPair<int32, UMaterialInterface*>> SlotsToSet;
+	TArray<FString> SlotsWithoutMaterial;
+	const TArray<FSkeletalMaterial>& Materials = SkeletalMesh->GetMaterials();
+	for (int32 SlotIndex = 0; SlotIndex < Materials.Num(); ++SlotIndex)
+	{
+		const FSoftObjectPath* MaterialPath = ImportData.MaterialBySlotName.Find(Materials[SlotIndex].MaterialSlotName);
+		UMaterialInterface* Material = MaterialPath ? Cast<UMaterialInterface>(MaterialPath->TryLoad()) : nullptr;
+		if (!Material)
+		{
+			SlotsWithoutMaterial.Add(Materials[SlotIndex].MaterialSlotName.ToString());
+		}
+		else if (Materials[SlotIndex].MaterialInterface != Material)
+		{
+			SlotsToSet.Emplace(SlotIndex, Material);
+		}
+	}
+
+	if (SlotsToSet.Num() > 0)
+	{
+		FScopedSkeletalMeshPostEditChange ScopedPostEditChange(SkeletalMesh);
+		SkeletalMesh->Modify();
+		TArray<FSkeletalMaterial>& EditableMaterials = SkeletalMesh->GetMaterials();
+		for (const TPair<int32, UMaterialInterface*>& SlotToSet : SlotsToSet)
+		{
+			EditableMaterials[SlotToSet.Key].MaterialInterface = SlotToSet.Value;
+		}
+	}
+
+	UE_LOG(LogDazToUnreal, Log, TEXT("DazToUnreal: re-import of %s: set %d of %d material slots to this import's material instances"),
+		*SkeletalMesh->GetPathName(), SlotsToSet.Num(), Materials.Num());
+	if (SlotsWithoutMaterial.Num() > 0)
+	{
+		UE_LOG(LogDazToUnreal, Warning, TEXT("DazToUnreal: re-import of %s: no material instance from this import for slots %s; they keep what the re-import left"),
+			*SkeletalMesh->GetPathName(), *FString::Join(SlotsWithoutMaterial, TEXT(", ")));
+	}
+#endif
+}
+
 // The figure owns its skeleton's rest pose. A skeleton keeps the rest pose of whichever mesh created (or
 // regenerated) it: later imports onto it only add the bones it lacks and never change existing ones. Wearables
 // (lashes, brows, hair, clothing) carry bones they have no skin weights on, and the bridge's bone-rotation fix
@@ -1832,18 +1888,18 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 								}
 							}
 
-							FDazToUnrealMaterials::CreateMaterial(ChildMaterialFolder, CharacterTexturesFolder, MaterialName, MaterialProperties, CharacterType, UnrealMaterialConstant, SubsurfaceProfile);
+							RememberSlotMaterial(ImportData, MaterialName, FDazToUnrealMaterials::CreateMaterial(ChildMaterialFolder, CharacterTexturesFolder, MaterialName, MaterialProperties, CharacterType, UnrealMaterialConstant, SubsurfaceProfile));
 						}
 						else
 						{
-							FDazToUnrealMaterials::CreateMaterial(ChildMaterialFolder, CharacterTexturesFolder, MaterialName, MaterialProperties, CharacterType, nullptr, SubsurfaceProfile);
+							RememberSlotMaterial(ImportData, MaterialName, FDazToUnrealMaterials::CreateMaterial(ChildMaterialFolder, CharacterTexturesFolder, MaterialName, MaterialProperties, CharacterType, nullptr, SubsurfaceProfile));
 						}
 					 }
 				}
 				else if (ChildMaterials.Num() == 1)
 				{
 					USubsurfaceProfile* SubsurfaceProfile = FDazToUnrealMaterials::CreateSubsurfaceProfileForMaterial(ChildMaterials[0], CharacterMaterialFolder / ChildMaterials[0], MaterialProperties[ChildMaterials[0]]);
-					FDazToUnrealMaterials::CreateMaterial(ChildMaterialFolder, CharacterTexturesFolder, ChildMaterials[0], MaterialProperties, CharacterType, nullptr, SubsurfaceProfile);
+					RememberSlotMaterial(ImportData, ChildMaterials[0], FDazToUnrealMaterials::CreateMaterial(ChildMaterialFolder, CharacterTexturesFolder, ChildMaterials[0], MaterialProperties, CharacterType, nullptr, SubsurfaceProfile));
 				}
 
 		  }
@@ -2308,6 +2364,7 @@ UObject* FDazToUnrealModule::ImportFBXAsset(const DazToUnrealImportData& DazImpo
 		  ReimportFactory->RemoveFromRoot();
 		  if (bReimported)
 		  {
+			   SetSlotMaterialsFromImport(ExistingMesh, DazImportData);
 			   ImportedAssets.Add(ExistingMesh);
 		  }
 		  else
