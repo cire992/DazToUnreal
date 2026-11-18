@@ -684,6 +684,33 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 	 // Shared texture library ("Texture Library" in the .dtu); empty means textures are imported per asset as before
 	 const FString TextureLibraryRoot = FDazToUnrealTextureLibrary::GetRoot(JsonObject);
 
+	 // Asset folder ("Asset Folder" in the .dtu): the Unreal folder the asset is imported into, such as
+	 // /DazAssets/Library/data/<vendor>/<product>/<item>, in place of <ImportDirectory>/<Product Component Name>.
+	 // Everything derived from the character folder (Materials, Textures, the existing-mesh lookup, the JCM Anim
+	 // Blueprint, the control rigs, the physics asset and skeleton the FBX import creates) follows it. Without the
+	 // field nothing below changes.
+	 FString AssetFolder;
+	 if (JsonObject->TryGetStringField(TEXT("Asset Folder"), AssetFolder))
+	 {
+		 AssetFolder = AssetFolder.TrimStartAndEnd().Replace(TEXT("\\"), TEXT("/"));
+		 while (AssetFolder.EndsWith(TEXT("/")))
+		 {
+			 AssetFolder.LeftChopInline(1);
+		 }
+	 }
+	 if (!AssetFolder.IsEmpty())
+	 {
+		 // Checks the characters and that the root (/DazAssets, /Game) is mounted
+		 FText Reason;
+		 if (!FPackageName::IsValidLongPackageName(AssetFolder, /*bIncludeReadOnlyRoots*/ false, &Reason))
+		 {
+			 UE_LOG(LogDazToUnreal, Error, TEXT("DazToUnreal: not importing %s: its asset folder \"%s\" (from the .dtu) isn't a valid long package path: %s"),
+				 *AssetName, *AssetFolder, *Reason.ToString());
+			 return nullptr;
+		 }
+		 UE_LOG(LogDazToUnreal, Log, TEXT("DazToUnreal: asset folder %s (from the .dtu)"), *AssetFolder);
+	 }
+
 	 // Materials-only import ("Materials Only" in the .dtu): textures and material instances, then stop
 	 // before the FBX import, so a materials preset (a skin) compiles as its own asset. Without the field
 	 // nothing below changes.
@@ -737,6 +764,12 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 		 CharacterTexturesFolder = DAZImportFolder / BatchConversionDestPath / TEXT("Textures");
 		 CharacterMaterialFolder = DAZImportFolder / BatchConversionDestPath / TEXT("Materials");
 	 }
+	 if (!AssetFolder.IsEmpty())
+	 {
+		 CharacterFolder = AssetFolder;
+		 CharacterTexturesFolder = CharacterFolder / TEXT("Textures");
+		 CharacterMaterialFolder = CharacterFolder / TEXT("Materials");
+	 }
 
 	 IPlatformFile& PlatformFile = FPlatformFileManager::Get().GetPlatformFile();
 
@@ -750,6 +783,8 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 	 FString LocalCharacterMaterialFolder = CharacterMaterialFolder.Replace(TEXT("/Game/"), *ContentDirectory);
 
 	 // Make any needed folders.  If any of these fail, don't continue
+	 // (The character folders are package paths, not disk paths: making them on disk only leaves empty folders at the
+	 // drive root, such as C:\DazAssets\..., so an asset folder from the .dtu skips that.)
 	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(ImportDirectory)) return nullptr;
 	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(ImportCharacterFolder)) return nullptr;
 	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(ImportCharacterTexturesFolder)) return nullptr;
@@ -757,16 +792,16 @@ UObject* FDazToUnrealModule::ImportFromDaz(TSharedPtr<FJsonObject> JsonObject, c
 	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(LocalDAZImportFolder)) return nullptr;
 	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(LocalDAZAnimationImportFolder)) return nullptr;
 	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(LocalDAZMLDeformerImportFolder)) return nullptr;
-	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(LocalCharacterFolder)) return nullptr;
-	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(LocalCharacterTexturesFolder)) return nullptr;
-	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(LocalCharacterMaterialFolder)) return nullptr;
+	 if (AssetFolder.IsEmpty() && !FDazToUnrealUtils::MakeDirectoryAndCheck(LocalCharacterFolder)) return nullptr;
+	 if (AssetFolder.IsEmpty() && !FDazToUnrealUtils::MakeDirectoryAndCheck(LocalCharacterTexturesFolder)) return nullptr;
+	 if (AssetFolder.IsEmpty() && !FDazToUnrealUtils::MakeDirectoryAndCheck(LocalCharacterMaterialFolder)) return nullptr;
 #else
 	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(DAZImportFolder)) return nullptr;
 	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(DAZAnimationImportFolder)) return nullptr;
 	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(DazMLDeformerImportFolder)) return nullptr;
-	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(CharacterFolder)) return nullptr;
-	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(CharacterTexturesFolder)) return nullptr;
-	 if (!FDazToUnrealUtils::MakeDirectoryAndCheck(CharacterMaterialFolder)) return nullptr;
+	 if (AssetFolder.IsEmpty() && !FDazToUnrealUtils::MakeDirectoryAndCheck(CharacterFolder)) return nullptr;
+	 if (AssetFolder.IsEmpty() && !FDazToUnrealUtils::MakeDirectoryAndCheck(CharacterTexturesFolder)) return nullptr;
+	 if (AssetFolder.IsEmpty() && !FDazToUnrealUtils::MakeDirectoryAndCheck(CharacterMaterialFolder)) return nullptr;
 #endif
 
 	 // If there's an HD FBX File, that's the source
