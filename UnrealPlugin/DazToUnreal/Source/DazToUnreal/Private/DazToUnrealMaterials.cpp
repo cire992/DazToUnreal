@@ -6,6 +6,8 @@
 #include "Factories/MaterialInstanceConstantFactoryNew.h"
 #include "Factories/SubsurfaceProfileFactory.h"
 #include "Engine/SubsurfaceProfile.h"
+#include "Misc/PackageName.h"
+#include "UObject/Package.h"
 #if ENGINE_MAJOR_VERSION == 5 && ENGINE_MINOR_VERSION > 0
 #include "AssetRegistry/AssetRegistryModule.h"
 #else
@@ -365,20 +367,40 @@ UMaterialInstanceConstant* FDazToUnrealMaterials::CreateMaterial(const FString C
 
 	CorrectDazShaders(MaterialName, MaterialProperties);
 
-	// Create the Material Instance
-	auto MaterialInstanceFactory = NewObject<UMaterialInstanceConstantFactoryNew>();
+	// Create the Material Instance, or update the one an earlier import made (see FindExistingMaterialInstance)
+	bool bExistingIsMaterialInstance = true;
+	UMaterialInstanceConstant* UnrealMaterialConstant = FindExistingMaterialInstance(CharacterMaterialFolder / MaterialName, MaterialName, bExistingIsMaterialInstance);
+	if (!bExistingIsMaterialInstance)
+	{
+		UE_LOG(LogDazToUnrealMaterial, Error, TEXT("DazToUnreal: %s already exists and is not a material instance; no material instance made for it"), *(CharacterMaterialFolder / MaterialName));
+		return nullptr;
+	}
+	const bool bUpdatingExisting = UnrealMaterialConstant != nullptr;
+	UPackage* Package = nullptr;
+	if (bUpdatingExisting)
+	{
+		Package = UnrealMaterialConstant->GetOutermost();
+		UnrealMaterialConstant->Modify();
+	}
+	else
+	{
+		auto MaterialInstanceFactory = NewObject<UMaterialInstanceConstantFactoryNew>();
 #if ENGINE_MAJOR_VERSION == 4 && ENGINE_MINOR_VERSION < 26
-	UPackage* Package = CreatePackage(nullptr, *(CharacterMaterialFolder / MaterialName));
+		Package = CreatePackage(nullptr, *(CharacterMaterialFolder / MaterialName));
 #else
-	UPackage* Package = CreatePackage(*(CharacterMaterialFolder / MaterialName));
+		Package = CreatePackage(*(CharacterMaterialFolder / MaterialName));
 #endif
-	UMaterialInstanceConstant* UnrealMaterialConstant = (UMaterialInstanceConstant*)MaterialInstanceFactory->FactoryCreateNew(UMaterialInstanceConstant::StaticClass(), Package, *MaterialName, RF_Standalone | RF_Public, NULL, GWarn);
+		UnrealMaterialConstant = (UMaterialInstanceConstant*)MaterialInstanceFactory->FactoryCreateNew(UMaterialInstanceConstant::StaticClass(), Package, *MaterialName, RF_Standalone | RF_Public, NULL, GWarn);
+	}
 
 
 	if (UnrealMaterialConstant != NULL)
 	{
-		// Notify the asset registry
-		FAssetRegistryModule::AssetCreated(UnrealMaterialConstant);
+		if (!bUpdatingExisting)
+		{
+			// Notify the asset registry
+			FAssetRegistryModule::AssetCreated(UnrealMaterialConstant);
+		}
 
 		// Set the dirty flag so this package will get saved later
 		Package->SetDirtyFlag(true);
@@ -395,6 +417,19 @@ UMaterialInstanceConstant* FDazToUnrealMaterials::CreateMaterial(const FString C
 		else
 		{
 			UnrealMaterialConstant->SetParentEditorOnly((UMaterial*)BaseMaterial);
+		}
+
+		if (bUpdatingExisting)
+		{
+			// Back to what a new instance starts with, so the values below are this import's and nothing else:
+			// no parameter overrides (each falls back to the parent's default), no static switch or base property
+			// overrides, no subsurface profile override
+			UnrealMaterialConstant->ClearParameterValuesEditorOnly();
+			FStaticParameterSet NoStaticParameterOverrides;
+			FMaterialInstanceBasePropertyOverrides NoBasePropertyOverrides;
+			UnrealMaterialConstant->UpdateStaticPermutation(NoStaticParameterOverrides, NoBasePropertyOverrides);
+			UnrealMaterialConstant->bOverrideSubsurfaceProfile = 0;
+			UnrealMaterialConstant->SubsurfaceProfile = nullptr;
 		}
 
 		if (SubsurfaceProfile)
@@ -489,10 +524,50 @@ UMaterialInstanceConstant* FDazToUnrealMaterials::CreateMaterial(const FString C
 				}
 			}
 		}
+
+		if (bUpdatingExisting)
+		{
+			// Propagate the new parent and values to the instances and meshes that use this one
+			UnrealMaterialConstant->PostEditChange();
+			UE_LOG(LogDazToUnrealMaterial, Log, TEXT("DazToUnreal: updated material instance %s (parent %s)"),
+				*UnrealMaterialConstant->GetPathName(), UnrealMaterialConstant->Parent ? *UnrealMaterialConstant->Parent->GetPathName() : TEXT("none"));
+		}
 	}
 
 
 	return UnrealMaterialConstant;
+}
+
+UMaterialInstanceConstant* FDazToUnrealMaterials::FindExistingMaterialInstance(const FString& PackageName, const FString& AssetName, bool& bOutIsMaterialInstance)
+{
+	// A re-import has to update an earlier import's material instance in place. Making a new one over it doesn't
+	// stick when the instance isn't loaded: CreatePackage then gives a new, empty package for a path whose file is on
+	// disk, and the engine treats such a package as not fully loaded (UPackage::IsFullyLoaded). The next load of
+	// anything that uses the instance (the re-import loads the existing mesh) loads the file into that package, over
+	// the new instance, and the package is then saved with the old parent and parameters. So the file is loaded
+	// first, here. LoadPackage leaves a package that is already fully loaded as it is.
+	bOutIsMaterialInstance = true;
+	UObject* Existing = nullptr;
+	if (FPackageName::DoesPackageExist(PackageName))
+	{
+		if (UPackage* ExistingPackage = LoadPackage(nullptr, *PackageName, LOAD_NoWarn | LOAD_Quiet))
+		{
+			Existing = StaticFindObjectFast(UObject::StaticClass(), ExistingPackage, FName(*AssetName));
+		}
+	}
+	else
+	{
+		// Made earlier in this session and not saved yet
+		Existing = StaticFindObject(UObject::StaticClass(), nullptr, *(PackageName + TEXT(".") + AssetName));
+	}
+
+	if (Existing == nullptr)
+	{
+		return nullptr;
+	}
+	UMaterialInstanceConstant* ExistingInstance = Cast<UMaterialInstanceConstant>(Existing);
+	bOutIsMaterialInstance = ExistingInstance != nullptr;
+	return ExistingInstance;
 }
 
 void FDazToUnrealMaterials::CorrectDazShaders(FString MaterialName, TMap<FString, TArray<FDUFTextureProperty>>& MaterialProperties)

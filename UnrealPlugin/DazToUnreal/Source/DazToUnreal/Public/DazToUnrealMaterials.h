@@ -31,6 +31,9 @@ class FDazToUnrealMaterials
 public:
 	static FSoftObjectPath GetBaseMaterial(FString MaterialName, TArray<FDUFTextureProperty > MaterialProperties);
 	static UMaterialInstanceConstant* CreateMaterial(const FString CharacterMaterialFolder, const FString CharacterTexturesFolder, FString& MaterialName, TMap<FString, TArray<FDUFTextureProperty>> MaterialProperties, const DazCharacterType CharacterType, UMaterialInterface* ParentMaterial, USubsurfaceProfile* SubsurfaceProfile);
+	// The material instance an earlier import made at PackageName, loaded from disk if needed; nullptr if there is none.
+	// bOutIsMaterialInstance is false when something else already has that name.
+	static UMaterialInstanceConstant* FindExistingMaterialInstance(const FString& PackageName, const FString& AssetName, bool& bOutIsMaterialInstance);
 	static void CorrectDazShaders(FString MaterialName, TMap<FString, TArray<FDUFTextureProperty>>& MaterialProperties);
 	static void SetMaterialProperty(const FString& MaterialName, const FString& PropertyName, const FString& PropertyType, const FString& PropertyValue, TMap<FString, TArray<FDUFTextureProperty>>& MaterialProperties);
 	static bool HasMaterialProperty(const FString& PropertyName, const TArray<FDUFTextureProperty> &MaterialProperties);
